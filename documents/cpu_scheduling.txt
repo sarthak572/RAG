@@ -1,0 +1,76 @@
+CPU Scheduling
+
+1. Why CPU Scheduling?
+CPU scheduling is the basis of multiprogrammed operating systems. By switching the CPU among
+processes, the operating system can make the computer more productive. The objective is to
+keep the CPU busy as much as possible by selecting a process from the ready queue whenever the
+CPU becomes idle.
+
+2. CPU-I/O Burst Cycle
+Process execution consists of a cycle of CPU execution (CPU burst) and I/O wait (I/O burst).
+Processes alternate between these bursts. A CPU-bound process has long CPU bursts and few I/O
+bursts; an I/O-bound process has short CPU bursts and frequent I/O bursts.
+
+3. Scheduling Criteria
+- CPU utilization: keep the CPU as busy as possible.
+- Throughput: number of processes completed per unit time.
+- Turnaround time: total time from submission to completion of a process (waiting to get into
+  memory + waiting in ready queue + executing on CPU + doing I/O).
+- Waiting time: total time a process spends waiting in the ready queue.
+- Response time: time from submission of a request until the first response is produced
+  (important for interactive systems).
+
+Typically we want to maximize CPU utilization and throughput, and minimize turnaround time,
+waiting time, and response time.
+
+4. First-Come, First-Served (FCFS)
+The process that requests the CPU first is allocated it first. Implemented with a FIFO queue.
+FCFS is non-preemptive and simple, but it can cause the convoy effect: a long CPU-bound process
+holds the CPU while many short processes wait behind it, which increases average waiting time
+significantly.
+
+5. Shortest-Job-First (SJF)
+The CPU is assigned to the process with the smallest next CPU burst. SJF is provably optimal:
+it gives the minimum average waiting time for a given set of processes. The main difficulty is
+that the length of the next CPU burst is not known in advance; it is typically estimated using
+an exponential average of past CPU burst lengths. SJF can be preemptive (Shortest-Remaining-Time-
+First, SRTF) or non-preemptive.
+
+6. Priority Scheduling
+Each process is assigned a priority, and the CPU is allocated to the process with the highest
+priority (by convention, smaller integer = higher priority, though conventions vary). SJF is a
+special case of priority scheduling where priority is the predicted next CPU burst time.
+Priority scheduling can be preemptive or non-preemptive. A major problem is starvation: a
+low-priority process may wait indefinitely if higher-priority processes keep arriving. The
+standard solution to starvation is aging: gradually increasing the priority of processes that
+wait in the system for a long time.
+
+7. Round Robin (RR)
+Designed especially for time-sharing systems. Each process gets a small unit of CPU time called
+a time quantum (typically 10-100 milliseconds), after which it is preempted and added to the end
+of the ready queue. If the time quantum is very large, RR degenerates into FCFS. If it is very
+small, overhead due to frequent context switches becomes significant. A common rule of thumb is
+that 80% of CPU bursts should be shorter than the time quantum.
+
+8. Multilevel Queue Scheduling
+The ready queue is partitioned into several separate queues, e.g., a foreground (interactive)
+queue and a background (batch) queue, each with its own scheduling algorithm. There must also be
+scheduling between queues, commonly fixed-priority preemptive scheduling (foreground queue may
+have absolute priority over background) or time-slicing (each queue gets a certain portion of
+CPU time to schedule among its own processes).
+
+9. Multilevel Feedback Queue
+Similar to multilevel queue scheduling, but processes can move between queues. If a process uses
+too much CPU time, it is moved to a lower-priority queue. A process that waits too long in a
+lower-priority queue may be moved to a higher-priority queue (this is also a form of aging that
+prevents starvation). This scheduler is the most general and adapts to process behavior, but it
+is also the most complex to configure (number of queues, algorithm per queue, criteria to move
+processes between queues).
+
+10. Example: FCFS Waiting Time Calculation
+Given processes P1 (burst 24), P2 (burst 3), P3 (burst 3) arriving in that order under FCFS:
+P1 runs 0-24, P2 runs 24-27, P3 runs 27-30.
+Waiting times: P1 = 0, P2 = 24, P3 = 27. Average waiting time = (0+24+27)/3 = 17 ms.
+If instead P2, P3, P1 is the arrival/run order (as in SJF), waiting times become P2 = 0, P3 = 3,
+P1 = 6, giving an average waiting time of 3 ms -- illustrating why SJF minimizes average waiting
+time compared to FCFS.

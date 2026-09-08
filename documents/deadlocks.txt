@@ -1,0 +1,85 @@
+Deadlocks
+
+1. What is a Deadlock?
+A deadlock is a situation in which two or more processes are unable to proceed because each is
+waiting for a resource held by another process in the same set, so none of them can ever make
+progress. Deadlocks typically occur when multiple processes compete for a finite number of
+reusable resources such as memory, printers, or lock variables.
+
+2. Necessary Conditions for Deadlock (Coffman Conditions)
+A deadlock can occur only if all four of the following conditions hold simultaneously:
+- Mutual Exclusion: at least one resource must be held in a non-shareable mode; only one
+  process at a time can use the resource.
+- Hold and Wait: a process is holding at least one resource and is waiting to acquire additional
+  resources currently held by other processes.
+- No Preemption: a resource can be released only voluntarily by the process holding it, after
+  it has completed its task; resources cannot be forcibly taken away.
+- Circular Wait: a set of processes {P0, P1, ..., Pn} exists such that P0 is waiting for a
+  resource held by P1, P1 is waiting for a resource held by P2, and so on, with Pn waiting for a
+  resource held by P0.
+
+All four conditions are necessary; breaking any single one is sufficient to prevent deadlock.
+
+3. Resource-Allocation Graph
+A directed graph with two kinds of nodes (processes and resource types) and two kinds of edges:
+a request edge (Pi -> Rj) means process Pi has requested an instance of resource type Rj; an
+assignment edge (Rj -> Pi) means an instance of Rj has been allocated to Pi. If the graph
+contains no cycles, no process is deadlocked. If the graph contains a cycle, deadlock exists if
+each resource type involved has exactly one instance; if a resource type in the cycle has
+multiple instances, a cycle is necessary but not sufficient for deadlock.
+
+4. Methods for Handling Deadlocks
+There are three general approaches:
+- Prevention: design the system so that at least one of the four necessary conditions can never
+  hold.
+- Avoidance: allow all four conditions to be possible, but dynamically examine the resource-
+  allocation state before granting any request, only granting requests that keep the system in
+  a safe state.
+- Detection and Recovery: allow deadlocks to happen, detect them when they occur, and recover
+  afterward.
+A fourth option, used by many general-purpose operating systems (including Unix and Windows),
+is to ignore the problem entirely and assume deadlocks never occur, leaving it to the
+application or the user to deal with the consequences.
+
+5. Deadlock Prevention Strategies
+- Attack Mutual Exclusion: make resources shareable where possible (not always feasible, e.g.
+  a printer cannot truly be shared mid-job).
+- Attack Hold and Wait: require a process to request and be allocated all its resources before
+  it begins execution, or require it to release all currently held resources before requesting
+  new ones. Both approaches lead to low resource utilization and possible starvation.
+- Attack No Preemption: if a process holding resources requests another resource that cannot be
+  immediately allocated, preempt (release) all resources it currently holds.
+- Attack Circular Wait: impose a total ordering of all resource types, and require each process
+  to request resources in strictly increasing order of enumeration. This is the most commonly
+  used prevention technique in practice.
+
+6. Deadlock Avoidance and the Banker's Algorithm
+Avoidance requires the system to know, in advance, the maximum number of resources of each type
+a process may request. The system maintains three key data structures: Available (resources
+currently free), Max (maximum demand of each process), and Allocation (resources currently
+allocated to each process); Need = Max - Allocation.
+A state is safe if there exists a safe sequence of all processes such that, for each process
+Pi in the sequence, the resources Pi still needs can be satisfied by the currently available
+resources plus the resources held by all processes before it in the sequence (since they will
+eventually finish and release their resources). The Banker's Algorithm grants a resource request
+only if the resulting state is still safe; otherwise, the process must wait, even if the
+resources are currently available. It is called the Banker's Algorithm because it models how a
+banker might decide whether to extend a loan without risking the ability to satisfy all
+customers eventually.
+
+7. Deadlock Detection
+If a system does not employ prevention or avoidance, it may allow deadlock to occur, then use a
+detection algorithm to periodically examine the state and determine whether a deadlock exists.
+For a single instance of each resource type, this reduces to cycle detection in a wait-for graph
+(a simplified resource-allocation graph). For multiple instances per resource type, an algorithm
+similar to the Banker's Algorithm is used to check whether a safe sequence still exists.
+
+8. Recovery from Deadlock
+Once detected, recovery options include:
+- Process termination: abort all deadlocked processes at once (simple but costly, since work
+  done by those processes is lost), or abort processes one at a time until the cycle is
+  eliminated (requires overhead of re-running the detection algorithm after each termination).
+- Resource preemption: successively preempt resources from processes and give them to other
+  processes until the deadlock cycle is broken; this requires selecting a victim, rolling back
+  the affected process to a safe state, and guarding against starvation of a repeatedly chosen
+  victim.

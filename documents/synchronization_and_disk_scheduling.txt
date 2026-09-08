@@ -1,0 +1,86 @@
+Process Synchronization and Disk Scheduling
+
+1. The Critical-Section Problem
+When multiple processes or threads access shared data concurrently, and the outcome depends on
+the particular order of access, this is called a race condition. The critical section is the
+segment of code where a process accesses shared resources; the critical-section problem is to
+design a protocol that ensures that when one process is executing in its critical section, no
+other process is allowed to execute in its own critical section. A valid solution must satisfy
+three requirements:
+- Mutual Exclusion: only one process may execute in its critical section at a time.
+- Progress: if no process is in its critical section, and some processes wish to enter, the
+  selection of which will enter next cannot be postponed indefinitely.
+- Bounded Waiting: there must be a limit on the number of times other processes are allowed to
+  enter their critical sections after a process has requested entry and before that request is
+  granted.
+
+2. Semaphores
+A semaphore S is an integer variable accessed only through two atomic operations: wait() (also
+called P, from Dutch "proberen") and signal() (also called V, "verhogen"). wait(S) decrements S
+and blocks the calling process if S becomes negative; signal(S) increments S and wakes a waiting
+process if any are blocked. Both operations must be implemented atomically (uninterruptible),
+usually with hardware support or by disabling interrupts briefly.
+- A counting semaphore can range over an unrestricted domain and is used to control access to a
+  resource with multiple instances.
+- A binary semaphore (also called a mutex lock) can only be 0 or 1, and is used to enforce
+  mutual exclusion around a single critical section.
+A key danger with semaphores is that incorrect use (e.g. forgetting a signal(), or calling
+wait() and signal() on different semaphores) can lead to deadlock or violate mutual exclusion;
+semaphores provide no automatic enforcement of correct usage.
+
+3. Monitors
+A monitor is a higher-level synchronization construct provided by a programming language: it is
+an abstract data type that encapsulates shared data along with the procedures that operate on
+it, guaranteeing that only one process can be active inside the monitor at any time. Monitors
+use condition variables (with wait() and signal() operations distinct from semaphore
+operations) to allow a process to block until a particular condition becomes true. Monitors are
+generally considered easier to use correctly than raw semaphores because the mutual exclusion is
+enforced automatically by the language/runtime rather than relying on the programmer to insert
+wait/signal calls correctly everywhere.
+
+4. Classic Synchronization Problems
+- Producer-Consumer (Bounded-Buffer) Problem: a producer process generates items into a
+  fixed-size buffer, and a consumer process removes items from it. Synchronization must ensure
+  the producer does not add to a full buffer and the consumer does not remove from an empty
+  buffer; typically solved with two counting semaphores (empty, full) and one binary semaphore
+  (mutex) for the buffer itself.
+- Readers-Writers Problem: a data set is shared among several concurrent processes; readers only
+  read the data and writers can both read and write. Multiple readers may access the data
+  simultaneously, but a writer must have exclusive access. Variants of this problem differ in
+  whether readers or writers get priority, and both can lead to starvation of the other group if
+  not carefully designed.
+- Dining Philosophers Problem: five philosophers sit at a round table with five chopsticks
+  (one between each pair), and each must acquire both adjacent chopsticks to eat. A naive
+  solution where every philosopher picks up their left chopstick first can deadlock if all five
+  do so simultaneously (each holds one chopstick and waits forever for the other) -- this
+  problem is the classic illustration of circular wait leading to deadlock, and solutions
+  include allowing at most four philosophers to sit simultaneously, requiring an asymmetric
+  pickup order (e.g. an odd philosopher picks up the left chopstick first, an even one picks up
+  the right first), or using a single mutex to guard all pickups.
+
+5. Disk Structure
+A hard disk is organized as a stack of platters, each with two surfaces divided into
+concentric circular tracks, which are further divided into sectors. A read/write head, mounted
+on an arm, must be positioned over the correct track (seek) and wait for the correct sector to
+rotate underneath it (rotational latency) before a transfer can occur. Disk access time is
+therefore the sum of seek time, rotational latency, and transfer time, with seek time usually
+dominating.
+
+6. Disk Scheduling Algorithms
+Since seek time dominates disk access time, the operating system schedules pending disk I/O
+requests to minimize total seek movement.
+- FCFS: services requests in the order they arrive. Simple and fair, but can result in poor
+  performance and long seek distances if requests are scattered across the disk.
+- SSTF (Shortest Seek Time First): services the request closest to the current head position
+  next. Reduces total seek time compared to FCFS, but can cause starvation of requests far from
+  the current head position if a stream of nearby requests keeps arriving.
+- SCAN (Elevator Algorithm): the disk arm moves in one direction, servicing all requests in its
+  path, until it reaches the end of the disk, then reverses direction. This avoids starvation
+  seen in SSTF while still keeping seek movement efficient, resembling an elevator.
+- C-SCAN (Circular SCAN): like SCAN, but when the arm reaches the end of the disk it returns
+  immediately to the beginning without servicing requests on the return trip, then starts
+  scanning again. This provides a more uniform wait time than plain SCAN, since it treats the
+  disk as a circular list where the last track is adjacent to the first.
+- LOOK and C-LOOK: variants of SCAN and C-SCAN where the arm only travels as far as the last
+  request in each direction, rather than always going all the way to the end of the disk,
+  reducing unnecessary arm movement.

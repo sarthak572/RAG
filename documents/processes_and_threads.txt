@@ -1,0 +1,79 @@
+Processes and Threads
+
+1. What is a Process?
+A process is a program in execution. It is an active entity, whereas a program stored on disk
+is a passive entity. A process requires resources such as CPU time, memory, files, and I/O
+devices to accomplish its task. The operating system is responsible for creating, scheduling,
+and terminating processes.
+
+2. Process Control Block (PCB)
+Every process is represented in the operating system by a Process Control Block, sometimes
+called a Task Control Block. The PCB stores all the information needed to manage a process:
+- Process state (new, ready, running, waiting, terminated)
+- Process ID (PID)
+- Program counter (address of the next instruction to execute)
+- CPU registers (accumulator, index registers, stack pointers)
+- CPU scheduling information (priority, pointers to scheduling queues)
+- Memory management information (base/limit registers, page tables, segment tables)
+- Accounting information (CPU time used, time limits, process number)
+- I/O status information (list of open files, list of allocated I/O devices)
+
+3. Process States
+A process moves through the following states during its lifetime:
+- New: the process is being created.
+- Ready: the process is waiting to be assigned to a processor by the scheduler.
+- Running: instructions are being executed on the CPU.
+- Waiting (Blocked): the process is waiting for some event to occur, such as I/O completion.
+- Terminated: the process has finished execution.
+
+Only one process can be in the Running state per CPU core at any instant, while many processes
+can be Ready or Waiting simultaneously. The transition Running -> Ready happens on interrupt or
+time-slice expiry; Running -> Waiting happens on an I/O or event request; Waiting -> Ready
+happens when the event completes.
+
+4. Context Switching
+A context switch is the mechanism of saving the state (context) of a currently running process
+into its PCB and loading the saved state of another process so the CPU can resume it. Context
+switch time is pure overhead: the system does no useful work while switching. This overhead is
+one reason scheduling algorithms avoid switching contexts too frequently. Context switch time
+depends on hardware support (some CPUs provide multiple sets of registers per process).
+
+5. Process Creation
+Processes are created by other processes via system calls such as fork() in Unix-like systems.
+The creating process is called the parent, and the new process is the child. Two common
+possibilities:
+- The parent and child execute concurrently.
+- The parent waits until the child terminates.
+Two possibilities for the child's address space:
+- The child is a duplicate of the parent (fork()).
+- The child has a new program loaded into it (exec()).
+
+6. Threads
+A thread is the basic unit of CPU utilization. It consists of a thread ID, program counter,
+register set, and a stack. A traditional (heavyweight) process has a single thread of control.
+Modern operating systems support multithreaded processes, where a single process can have
+multiple threads of execution sharing the same code section, data section, and open files, but
+each thread has its own program counter, stack, and register set.
+
+Benefits of multithreading:
+- Responsiveness: a program can continue running even if part of it is blocked.
+- Resource sharing: threads share the memory and resources of the process they belong to.
+- Economy: creating and context-switching threads is cheaper than for full processes.
+- Scalability: threads can execute in parallel on multicore architectures.
+
+7. Multithreading Models
+- Many-to-One: many user-level threads mapped to a single kernel thread. Thread management is
+  done in user space, so it is efficient, but the entire process blocks if one thread makes a
+  blocking system call, and only one thread can access the kernel at a time (no true parallelism
+  on multiprocessors).
+- One-to-One: each user thread maps to a kernel thread. Provides more concurrency, since another
+  thread can run when one thread blocks, but creating a user thread requires creating a
+  corresponding kernel thread, which can burden performance.
+- Many-to-Many: multiplexes many user-level threads to a smaller or equal number of kernel
+  threads, combining the best properties of the other two models.
+
+8. User Threads vs Kernel Threads
+User threads are managed by a thread library without kernel support and are fast to create and
+manage, but the kernel cannot see them individually. Kernel threads are supported and managed
+directly by the operating system; kernel thread management is generally slower than user thread
+management because the kernel must be involved.

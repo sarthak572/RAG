@@ -1,0 +1,628 @@
+18
+Paging: Introduction
+It is sometimes said that the operating system takes one of two ap-
+proaches when solving most any space-management problem. The ﬁr st
+approach is to chop things up into variable-sized pieces, as we saw with
+segmentation in virtual memory . Unfortunately , this solution has inher-
+ent difﬁculties. In particular, when dividing a space into d ifferent-size
+chunks, the space itself can become fragmented, and thus allocation be-
+comes more challenging over time.
+Thus, it may be worth considering the second approach: to chop up
+space into ﬁxed-sized pieces. In virtual memory , we call this idea paging,
+and it goes back to an early and important system, the Atlas [KE+62, L78].
+Instead of splitting up a process’s address space into some numbe r of
+variable-sized logical segments (e.g., code, heap, stack), w e divide it into
+ﬁxed-sized units, each of which we call a page. Correspondingly , we view
+physical memory as an array of ﬁxed-sized slots called page frames; each
+of these frames can contain a single virtual-memory page. Our ch allenge:
+THE CRUX : H OW TO VIRTUALIZE MEMORY WITH PAGES
+How can we virtualize memory with pages, so as to avoid the prob-
+lems of segmentation? What are the basic techniques? How do we ma ke
+those techniques work well, with minimal space and time overhea ds?
+18.1 A Simple Example And Overview
+To help make this approach more clear, let’s illustrate it with a simple
+example. Figure 18.1 (page 2) presents an example of a tiny address space,
+only 64 bytes total in size, with four 16-byte pages (virtual pag es 0, 1, 2,
+and 3). Real address spaces are much bigger, of course, commonly 3 2 bits
+and thus 4-GB of address space, or even 64 bits 1; in the book, we’ll often
+use tiny examples to make them easier to digest.
+1A 64-bit address space is hard to imagine, it is so amazingly large. An analogy might
+help: if you think of a 32-bit address space as the size of a tennis court, a 64-bit address space
+is about the size of Europe(!).
+1
+
+2 P AGING : I NTRODUCTION
+64
+48
+32
+16
+0
+(page 3)
+(page 2)
+(page 1)
+(page 0 of the address space)
+Figure 18.1: A Simple 64-byte Address Space
+Physical memory , as shown in Figure 18.2, also consists of a numbe r
+of ﬁxed-sized slots, in this case eight page frames (making for a 128-byte
+physical memory , also ridiculously small). As you can see in thediagram,
+the pages of the virtual address space have been placed at diff erent loca-
+tions throughout physical memory; the diagram also shows the OS us ing
+some of physical memory for itself.
+Paging, as we will see, has a number of advantages over our previou s
+approaches. Probably the most important improvement will be ﬂexibil-
+ity: with a fully-developed paging approach, the system will be ab le to
+support the abstraction of an address space effectively , regardless of how
+a process uses the address space; we won’t, for example, make assu mp-
+tions about the direction the heap and stack grow and how they are us ed.
+128
+112
+96
+80
+64
+48
+32
+16
+0
+page frame 7
+page frame 6
+page frame 5
+page frame 4
+page frame 3
+page frame 2
+page frame 1
+page frame 0 of physical memory reserved for OS
+(unused)
+page 3 of AS
+page 0 of AS
+(unused)
+page 2 of AS
+(unused)
+page 1 of AS
+Figure 18.2: A 64-Byte Address Space In A 128-Byte Physical Memory
+OPERATING
+SYSTEMS
+[V ERSION 1.10]
+WWW.OSTEP .ORG
+
+PAGING : I NTRODUCTION 3
+Another advantage is the simplicity of free-space management that pag-
+ing affords. For example, when the OS wishes to place our tiny 64- byte
+address space into our eight-page physical memory , it simply ﬁ nds four
+free pages; perhaps the OS keeps a free list of all free pages for this, and
+just grabs the ﬁrst four free pages off of this list. In the exampl e, the OS
+has placed virtual page 0 of the address space (AS) in physical f rame 3,
+virtual page 1 of the AS in physical frame 7, page 2 in frame 5, an d page
+3 in frame 2. Page frames 1, 4, and 6 are currently free.
+To record where each virtual page of the address space is placed in
+physical memory , the operating system usually keeps a per-process data
+structure known as a page table . The major role of the page table is to
+store address translations for each of the virtual pages of the address
+space, thus letting us know where in physical memory each page r esides.
+For our simple example (Figure 18.2, page 2), the page table woul d thus
+have the following four entries: (Virtual Page 0 → Physical Frame 3),
+(VP 1 → PF 7), (VP 2 → PF 5), and (VP 3 → PF 2).
+It is important to remember that this page table is a per-process data
+structure (most page table structures we discuss are per-proc ess struc-
+tures; an exception we’ll touch on is the inverted page table ). If another
+process were to run in our example above, the OS would have to manag e
+a different page table for it, as its virtual pages obviously map to different
+physical pages (modulo any sharing going on).
+Now, we know enough to perform an address-translation example.
+Let’s imagine the process with that tiny address space (64 byte s) is per-
+forming a memory access:
+movl <virtual address>, %eax
+Speciﬁcally , let’s pay attention to the explicit load of the data f rom
+address <virtual address> into the register eax (and thus ignore the
+instruction fetch that must have happened prior).
+To translate this virtual address that the process generated, we have
+to ﬁrst split it into two components: the virtual page number (VPN), and
+the offset within the page. For this example, because the virtual addres s
+space of the process is 64 bytes, we need 6 bits total for our virtual address
+(26 = 64 ). Thus, our virtual address can be conceptualized as follows:
+Va5 Va4 Va3 Va2 Va1 Va0
+In this diagram, Va5 is the highest-order bit of the virtual add ress, and
+Va0 the lowest-order bit. Because we know the page size (16 bytes ), we
+can further divide the virtual address as follows:
+Va5 Va4 Va3 Va2 Va1 Va0
+VPN offset
+© 2008–25, A RPACI -D USSEAU THREE
+EASY
+PIECES
+
+4 P AGING : I NTRODUCTION
+The page size is 16 bytes in a 64-byte address space; thus we ne ed to
+be able to select 4 pages, and the top 2 bits of the address do just that.
+Thus, we have a 2-bit virtual page number (VPN). The remainin g bits tell
+us which byte of the page we are interested in, 4 bits in this cas e; we call
+this the offset.
+When a process generates a virtual address, the OS and hardwar e
+must combine to translate it into a meaningful physical addre ss. For ex-
+ample, let us assume the load above was to virtual address 21:
+movl 21, %eax
+Turning “21” into binary form, we get “010101”, and thus we can ex-
+amine this virtual address and see how it breaks down into a virt ual page
+number (VPN) and offset:
+0 1 0 1 0 1
+VPN offset
+Thus, the virtual address “21” is on the 5th (“0101”th) byte of v irtual
+page “01” (or 1). With our virtual page number, we can now index our
+page table and ﬁnd which physical frame virtual page 1 resides within. In
+the page table above the physical frame number (PFN) (also sometimes
+called the physical page number or PPN) is 7 (binary 111). Thus, we can
+translate this virtual address by replacing the VPN with the PFN and then
+issue the load to physical memory (Figure 18.3).
+0 1 0 1 0 1
+VPN offset
+1 1 1 0 1 0 1
+Address
+Translation
+PFN offset
+Virtual
+Address
+Physical
+Address
+Figure 18.3: The Address T ranslation Process
+OPERATING
+SYSTEMS
+[V ERSION 1.10]
+WWW.OSTEP .ORG
+
+PAGING : I NTRODUCTION 5
+128
+112
+96
+80
+64
+48
+32
+16
+0
+page frame 7
+page frame 6
+page frame 5
+page frame 4
+page frame 3
+page frame 2
+page frame 1
+page frame 0 of physical memory
+(unused)
+page 3 of AS
+page 0 of AS
+(unused)
+page 2 of AS
+(unused)
+page 1 of AS
+page table:
+3 7 5 2
+Figure 18.4: Example: Page T able in Kernel Physical Memory
+Note the offset stays the same (i.e., it is not translated), beca use the
+offset just tells us which byte within the page we want. Our ﬁnal physical
+address is 1110101 (117 in decimal), and is exactly where we w ant our
+load to fetch data from (Figure 18.2, page 2).
+With this basic overview in mind, we can now ask (and hopefully ,
+answer) a few basic questions you may have about paging. For examp le,
+where are these page tables stored? What are the typical conten ts of the
+page table, and how big are the tables? Does paging make the syst em
+(too) slow? These and other beguiling questions are answered, at l east in
+part, in the text below. Read on!
+18.2 Where Are Page Tables Stored?
+Page tables can get terribly large, much bigger than the smal l segment
+table or base/bounds pair we have discussed previously . For exam ple,
+imagine a typical 32-bit address space, with 4KB pages. This virtual ad-
+dress splits into a 20-bit VPN and 12-bit offset (recall that 1 0 bits would
+be needed for a 1KB page size, and just add two more to get to 4KB).
+A 20-bit VPN implies that there are 220 translations that the OS would
+have to manage for each process (that’s roughly a million); assumi ng we
+need 4 bytes per page table entry (PTE) to hold the physical translation
+plus any other useful stuff, we get an immense 4MB of memory neede d
+for each page table! That is pretty large. Now imagine there are 100
+processes running: this means the OS would need 400MB of memory
+just for all those address translations! Even in the modern era, w here
+© 2008–25, A RPACI -D USSEAU THREE
+EASY
+PIECES
+
+6 P AGING : I NTRODUCTION
+ASIDE : D ATA STRUCTURE — T HE PAGE TABLE
+One of the most important data structures in the memory managemen t
+subsystem of a modern OS is the page table . In general, a page table
+stores virtual-to-physical address translations , thus letting the system
+know where each page of an address space actually resides in phy sical
+memory . Because each address space requires such translation s, in gen-
+eral there is one page table per process in the system. The exact structure
+of the page table is either determined by the hardware (older sy stems) or
+can be more ﬂexibly managed by the OS (modern systems).
+machines have gigabytes of memory , it seems a little crazy to us e a large
+chunk of it just for translations, no? And we won’t even think about how
+big such a page table would be for a 64-bit address space; that wou ld be
+too gruesome and perhaps scare you off entirely .
+Because page tables are so big, we don’t keep any special on-chip hard-
+ware in the MMU to store the page table of the currently-running process.
+Instead, we store the page table for each process in memory somewhere.
+Let’s assume for now that the page tables live in physical memory t hat
+the OS manages; later we’ll see that much of OS memory itself can b e vir-
+tualized, and thus page tables can be stored in OS virtual memor y (and
+even swapped to disk), but that is too confusing right now, so we’l l ig-
+nore it. In Figure 18.4 (page 5) is a picture of a page table in OS m emory;
+see the tiny set of translations in there?
+18.3 What’s Actually In The Page Table?
+Let’s talk a little about page table organization. The page table is just
+a data structure that is used to map virtual addresses (or real ly , virtual
+page numbers) to physical addresses (physical frame number s). Thus,
+any data structure could work. The simplest form is called a linear page
+table, which is just an array . The OS indexes the array by the virtual page
+number (VPN), and looks up the page-table entry (PTE) at that in dex in
+order to ﬁnd the desired physical frame number (PFN). For now, we will
+assume this simple linear structure; in later chapters, we w ill make use of
+more advanced data structures to help solve some problems with pa ging.
+As for the contents of each PTE, we have a number of different bits
+in there worth understanding at some level. A valid bit is common to
+indicate whether the particular translation is valid; for exa mple, when
+a program starts running, it will have code and heap at one end of it s
+address space, and the stack at the other. All the unused space in-between
+will be marked invalid, and if the process tries to access such memory , it
+will generate a trap to the OS which will likely terminate the process.
+Thus, the valid bit is crucial for supporting a sparse address s pace; by
+simply marking all the unused pages in the address space inva lid, we
+remove the need to allocate physical frames for those pages and thus save
+a great deal of memory .
+OPERATING
+SYSTEMS
+[V ERSION 1.10]
+WWW.OSTEP .ORG
+
+PAGING : I NTRODUCTION 7
+31 12 11 9 8 7 6 5 4 3 2 1 0
+PFN
+G
+PAT
+D
+A
+PCD
+PWT
+U/S
+R/W
+P
+Figure 18.5: An x86 Page T able Entry (PTE)
+We also might have protection bits, indicating whether the page could
+be read from, written to, or executed from. Again, accessing a pag e in a
+way not allowed by these bits will generate a trap to the OS.
+There are a couple of other bits that are important but we won’t talk
+about much for now. A present bit indicates whether this page is in phys-
+ical memory or on disk (i.e., it has been swapped out ). We will under-
+stand this machinery further when we study how to swap parts of the
+address space to disk to support address spaces that are large r than phys-
+ical memory; swapping allows the OS to free up physical memory by
+moving rarely-used pages to disk. A dirty bit is also common, indicating
+whether the page has been modiﬁed since it was brought into memor y .
+A reference bit (a.k.a. accessed bit) is sometimes used to track whether
+a page has been accessed, and is useful in determining which p ages are
+popular and thus should be kept in memory; such knowledge is criti cal
+during page replacement, a topic we will study in great detail in subse-
+quent chapters.
+Figure 18.5 shows an example page table entry from the x86 archi tec-
+ture [I09]. It contains a present bit (P); a read/write bit (R/ W) which
+determines if writes are allowed to this page; a user/supervi sor bit (U/S)
+which determines if user-mode processes can access the page; a few bits
+(PWT, PCD, PAT, and G) that determine how hardware caching works for
+these pages; an accessed bit (A) and a dirty bit (D); and ﬁnall y , the page
+frame number (PFN) itself.
+Read the Intel Architecture Manuals [I09] for more details on x8 6 pag-
+ing support. Be forewarned, however; reading manuals such as th ese,
+while quite informative (and certainly necessary for those who write code
+to use such page tables in the OS), can be challenging at ﬁrst. A little pa-
+tience, and a lot of desire, is required.
+ASIDE : W HY NO VALID BIT ?
+You may notice that in the Intel example, there are no separate v alid and
+present bits, but rather just a present bit (P). If that bit is set (P=1), it
+means the page is both present and valid. If not (P=0), it means t hat
+the page may not be present in memory (but is valid), or may not be
+valid. An access to a page with P=0 will trigger a trap to the OS; the
+OS must then use additional structures it keeps to determine w hether
+the page is valid (and thus perhaps should be swapped back in) or not
+(and thus the program is attempting to access memory illegally ). This
+sort of judiciousness is common in hardware, which often just provid e
+the minimal set of features upon which the OS can build a full ser vice.
+© 2008–25, A RPACI -D USSEAU THREE
+EASY
+PIECES
+
+8 P AGING : I NTRODUCTION
+18.4 Paging: Also Too Slow
+With page tables in memory , we already know that they might be too
+big. As it turns out, they can slow things down too. For example, take
+our simple instruction:
+movl 21, %eax
+Again, let’s just examine the explicit reference to address 2 1 and not
+worry about the instruction fetch. In this example, we’ll assume the hard-
+ware performs the translation for us. To fetch the desired data, the system
+must ﬁrst translate the virtual address (21) into the correct physical ad-
+dress (117). Thus, before fetching the data from address 117, t he system
+must ﬁrst fetch the proper page table entry from the process’s pag e table,
+perform the translation, and then load the data from physical mem ory .
+To do so, the hardware must know where the page table is for the
+currently-running process. Let’s assume for now that a single page-table
+base register contains the physical address of the starting location of the
+page table. To ﬁnd the location of the desired PTE, the hardware w ill thus
+perform the following functions:
+VPN = (VirtualAddress & VPN_MASK) >> SHIFT
+PTEAddr = PageTableBaseRegister + (VPN * sizeof(PTE))
+In our example, VPN_MASK would be set to 0x30 (hex 30, or binary
+110000) which picks out the VPN bits from the full virtual address; SHIFT
+is set to 4 (the number of bits in the offset), such that we move the VPN
+bits down to form the correct integer virtual page number. For exa m-
+ple, with virtual address 21 (010101), and masking turns thi s value into
+010000; the shift turns it into 01, or virtual page 1, as desire d. We then use
+this value as an index into the array of PTEs pointed to by the pag e table
+base register.
+Once this physical address is known, the hardware can fetch th e PTE
+from memory , extract the PFN, and concatenate it with the offset from the
+virtual address to form the desired physical address. Speciﬁc ally , you can
+think of the PFN being left-shifted by SHIFT, and then bitwise OR’d with
+the offset to form the ﬁnal address as follows:
+offset = VirtualAddress & OFFSET_MASK
+PhysAddr = (PFN << SHIFT) | offset
+Finally , the hardware can fetch the desired data from memory and put
+it into register eax. The program has now succeeded at loading a value
+from memory!
+To summarize, we now describe the initial protocol for what happen s
+on each memory reference. Figure 18.6 (page 9) shows the approach . For
+every memory reference (whether an instruction fetch or an expl icit load
+or store), paging requires us to perform one extra memory referenc e in
+order to ﬁrst fetch the translation from the page table. That is a lot of
+OPERATING
+SYSTEMS
+[V ERSION 1.10]
+WWW.OSTEP .ORG
+
+PAGING : I NTRODUCTION 9
+1 // Extract the VPN from the virtual address
+2 VPN = (VirtualAddress & VPN_MASK) >> SHIFT
+3
+4 // Form the address of the page-table entry (PTE)
+5 PTEAddr = PTBR + (VPN * sizeof(PTE))
+6
+7 // Fetch the PTE
+8 PTE = AccessMemory(PTEAddr)
+9
+10 // Check if process can access the page
+11 if (PTE.Valid == False)
+12 RaiseException(SEGMENTATION_FAULT)
+13 else if (CanAccess(PTE.ProtectBits) == False)
+14 RaiseException(PROTECTION_FAULT)
+15 else
+16 // Access OK: form physical address and fetch it
+17 offset = VirtualAddress & OFFSET_MASK
+18 PhysAddr = (PTE.PFN << PFN_SHIFT) | offset
+19 Register = AccessMemory(PhysAddr)
+Figure 18.6: Accessing Memory With Paging
+work! Extra memory references are costly , and in this case will l ikely
+slow down the process by a factor of two or more.
+And now you can hopefully see that there are two real problems that
+we must solve. Without careful design of both hardware and softwar e,
+page tables will cause the system to run too slowly , as well as ta ke up
+too much memory . While seemingly a great solution for our memory
+virtualization needs, these two crucial problems must ﬁrst be overcome.
+18.5 A Memory Trace
+Before closing, we now trace through a simple memory access exam-
+ple to demonstrate all of the resulting memory accesses that occu r when
+using paging. The code snippet (in C, in a ﬁle called array.c) that we
+are interested in is as follows:
+int array[1000];
+...
+for (i = 0; i < 1000; i++)
+array[i] = 0;
+We compile array.c and run it with the following commands:
+prompt> gcc -o array array.c -Wall -O
+prompt> ./array
+© 2008–25, A RPACI -D USSEAU THREE
+EASY
+PIECES
+
+10 P AGING : I NTRODUCTION
+Of course, to truly understand what memory accesses this code sn ip-
+pet (which simply initializes an array) will make, we’ll have to know (or
+assume) a few more things. First, we’ll have to disassemble the result-
+ing binary (using objdump on Linux, or otool on a Mac) to see what
+assembly instructions are used to initialize the array in a loop . Here is the
+resulting assembly code:
+1024 movl $0x0,(%edi,%eax,4)
+1028 incl %eax
+1032 cmpl $0x03e8,%eax
+1036 jne 1024
+The code, if you know a little x86, is actually quite easy to understand2.
+The ﬁrst instruction moves the value zero (shown as $0x0) into the vir-
+tual memory address of the location of the array; this address is computed
+by taking the contents of %edi and adding %eax multiplied by four to it.
+Thus, %edi holds the base address of the array , whereas %eax holds the
+array index (i); we multiply by four because the array is an array of inte-
+gers, each of size four bytes.
+The second instruction increments the array index held in %eax, and
+the third instruction compares the contents of that register to t he hex
+value 0x03e8, or decimal 1000. If the comparison shows that two val-
+ues are not yet equal (which is what the jne instruction tests), the fourth
+instruction jumps back to the top of the loop.
+To understand which memory accesses this instruction sequence makes
+(at both the virtual and physical levels), we’ll have to assume something
+about where in virtual memory the code snippet and array are found , as
+well as the contents and location of the page table.
+For this example, we assume a virtual address space of size 64KB (un-
+realistically small). We also assume a page size of 1KB.
+All we need to know now are the contents of the page table, and its
+location in physical memory . Let’s assume we have a linear (array-based)
+page table and that it is located at physical address 1KB (1024 ).
+As for its contents, there are just a few virtual pages we need to worry
+about having mapped for this example. First, there is the virtu al page the
+code lives on. Because the page size is 1KB, virtual address 102 4 resides
+on the second page of the virtual address space (VPN=1, as VPN=0 i s
+the ﬁrst page). Let’s assume this virtual page maps to physica l frame 4
+(VPN 1 → PFN 4).
+Next, there is the array itself. Its size is 4000 bytes (1000 i ntegers),
+and we assume that it resides at virtual addresses 40000 throu gh 44000
+(not including the last byte). The virtual pages for this decim al range are
+VPN=39 ... VPN=42. Thus, we need mappings for these pages. Let ’s as-
+sume these virtual-to-physical mappings for the example: (VPN 39 → PFN 7),
+(VPN 40 → PFN 8), (VPN 41 → PFN 9), (VPN 42 → PFN 10).
+2We are cheating a little bit here, assuming each instruction is four byt es in size for sim-
+plicity; in actuality , x86 instructions are variable-sized.
+OPERATING
+SYSTEMS
+[V ERSION 1.10]
+WWW.OSTEP .ORG
+
+PAGING : I NTRODUCTION 11
+0 10 20 30 40 50
+1024
+1074
+1124
+Memory Access
+Code (VA)
+40000
+40050
+40100Array (VA)
+1024
+1074
+1124
+1174
+1224
+Page Table (PA)
+4096
+4146
+4196
+Code (PA)
+7232
+7282
+7332
+Array (PA)
+mov
+inc
+cmp
+jne
+mov
+PageTable[1]
+PageTable[39]
+Figure 18.7: A Virtual (And Physical) Memory T race
+We are now ready to trace the memory references of the program.
+When it runs, each instruction fetch will generate two memory references:
+one to the page table to ﬁnd the physical frame that the instruction resides
+within, and one to the instruction itself to fetch it to the CPU f or process-
+ing. In addition, there is one explicit memory reference in the f orm of
+the mov instruction; this adds another page table access ﬁrst (to tran slate
+the array virtual address to the correct physical one) and then the array
+access itself.
+The entire process, for the ﬁrst ﬁve loop iterations, is depicted i n Fig-
+ure 18.7 (page 11). The bottom most graph shows the instruction mem ory
+references on the y-axis in black (with virtual addresses on th e left, and
+the actual physical addresses on the right); the middle graph shows array
+accesses in dark gray (again with virtual on left and physical on right); ﬁ-
+nally , the topmost graph shows page table memory accesses in ligh t gray
+(just physical, as the page table in this example resides in p hysical mem-
+ory). The x-axis, for the entire trace, shows memory accesses acr oss the
+ﬁrst ﬁve iterations of the loop; there are 10 memory accesses per loop ,
+which includes four instruction fetches, one explicit update of memory ,
+and ﬁve page table accesses to translate those four fetches and one explicit
+update.
+© 2008–25, A RPACI -D USSEAU THREE
+EASY
+PIECES
+
+12 P AGING : I NTRODUCTION
+See if you can make sense of the patterns that show up in this visu-
+alization. In particular, what will change as the loop continues to run
+beyond these ﬁrst ﬁve iterations? Which new memory locations will be
+accessed? Can you ﬁgure it out?
+This has just been the simplest of examples (only a few lines of C code),
+and yet you might already be able to sense the complexity of under stand-
+ing the actual memory behavior of real applications. Don’t worry: it deﬁ-
+nitely gets worse, because the mechanisms we are about to introduce only
+complicate this already complex machinery . Sorry3!
+18.6 Summary
+We have introduced the concept of paging as a solution to our chal-
+lenge of virtualizing memory . Paging has many advantages over p revi-
+ous approaches (such as segmentation). First, it does not lead to e xternal
+fragmentation, as paging (by design) divides memory into ﬁxed -sized
+units. Second, it is quite ﬂexible, enabling the sparse use of vi rtual ad-
+dress spaces.
+However, implementing paging support without care will lead to a
+slower machine (with many extra memory accesses to access the p age
+table) as well as memory waste (with memory ﬁlled with page tabl es in-
+stead of useful application data). We’ll thus have to think a lit tle harder
+to come up with a paging system that not only works, but works well.
+The next two chapters, fortunately , will show us how to do so.
+3We’re not really sorry . But, we are sorry about not being sorry , if that makes sense.
+OPERATING
+SYSTEMS
+[V ERSION 1.10]
+WWW.OSTEP .ORG
+
+PAGING : I NTRODUCTION 13
+References
+[KE+62] “One-level Storage System” by T. Kilburn, D.B.G. Edwards , M.J. Lanigan, F.H. Sum-
+ner. IRE Trans. EC-11, 2, 1962. Reprinted in Bell and Newell, “Comp uter Structures: Readings
+and Examples”. McGraw-Hill, New York, 1971. The Atlas pioneered the idea of dividing memory
+into ﬁxed-sized pages and in many senses was an early form of the memory-managem ent ideas we see
+in modern computer systems.
+[I09] “Intel 64 and IA-32 Architectures Software Developer’s Manuals” Intel, 2009. Available:
+http://www.intel.com/products/processor/manuals. In particular, pay attention to “Volume
+3A: System Programming Guide Part 1” and “Volume 3B: System Programmin g Guide Part 2”.
+[L78] “The Manchester Mark I and Atlas: A Historical Perspective” by S. H. L avington. Com-
+munications of the ACM, V olume 21:1, January 1978. This paper is a great retrospective of some of
+the history of the development of some important computer systems. As we someti mes forget in the US,
+many of these new ideas came from overseas.
+© 2008–25, A RPACI -D USSEAU THREE
+EASY
+PIECES
+
+14 P AGING : I NTRODUCTION
+Homework (Simulation)
+In this homework, you will use a simple program, which is known as
+paging-linear-translate.py, to see if you understand how simple
+virtual-to-physical address translation works with linear pa ge tables. See
+the README for details.
+Questions
+1. Before doing any translations, let’s use the simulator to study how
+linear page tables change size given different parameters. Compute
+the size of linear page tables as different parameters change . Some
+suggested inputs are below; by using the -v ﬂag, you can see how
+many page-table entries are ﬁlled. First, to understand how l inear
+page table size changes as the address space grows, run with th ese
+ﬂags:
+• -P 1k -a 1m -p 512m -v -n 0
+• -P 1k -a 2m -p 512m -v -n 0
+• -P 1k -a 4m -p 512m -v -n 0
+2. Then, let’s understand how linear page table size changes as page
+size grows. Before running any of these, try to think about the ex-
+pected trends. How should page-table size change as the addres s
+space grows? As the page size grows? Why not use big pages in
+general?
+• -P 1k -a 1m -p 512m -v -n 0
+• -P 2k -a 1m -p 512m -v -n 0
+• -P 4k -a 1m -p 512m -v -n 0
+3. Now let’s do some translations. Start with some small examples,
+and change the number of pages that are allocated to the address
+space with the -u ﬂag. What happens as you increase the percent-
+age of pages that are allocated in each address space?
+• -P 1k -a 16k -p 32k -v -u 0
+• -P 1k -a 16k -p 32k -v -u 25
+• -P 1k -a 16k -p 32k -v -u 50
+• -P 1k -a 16k -p 32k -v -u 75
+• -P 1k -a 16k -p 32k -v -u 100
+4. Now let’s try some different random seeds, and some different (a nd
+sometimes quite crazy) address-space parameters, for variety . Which
+of these parameter combinations are unrealistic? Why?
+• -P 8 -a 32 -p 1024 -v -s 1
+OPERATING
+SYSTEMS
+[V ERSION 1.10]
+WWW.OSTEP .ORG
+
+PAGING : I NTRODUCTION 15
+• -P 8k -a 32k -p 1m -v -s 2
+• -P 1m -a 256m -p 512m -v -s 3
+5. Use the program to try out some other problems. Can you ﬁnd the
+limits of where the program doesn’t work anymore? For example,
+what happens if the address-space size is bigger than physical mem-
+ory?
+© 2008–25, A RPACI -D USSEAU THREE
+EASY
+PIECES

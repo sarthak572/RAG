@@ -1,0 +1,1332 @@
+<title>Production RAG Architecture Deep Dive</title>
+<style>
+:root {
+  --primary: #0066cc;
+  --secondary: #00a651;
+  --accent: #ff6b35;
+  --bg-light: #f5f5f5;
+  --text-dark: #1a1a1a;
+  --border: #ddd;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-light: #1e1e1e;
+    --text-dark: #f0f0f0;
+    --border: #444;
+  }
+}
+
+body {
+  background-color: var(--bg-light);
+  color: var(--text-dark);
+  line-height: 1.6;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  padding: 20px;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+h1 { color: var(--primary); margin-top: 0; }
+h2 { color: var(--primary); border-bottom: 2px solid var(--secondary); padding-bottom: 8px; margin-top: 30px; }
+h3 { color: var(--accent); }
+
+.diagram {
+  background: var(--bg-light);
+  border: 2px solid var(--primary);
+  border-radius: 8px;
+  padding: 20px;
+  margin: 20px 0;
+  font-family: monospace;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.component {
+  background: rgba(0, 102, 204, 0.1);
+  border-left: 4px solid var(--primary);
+  padding: 15px;
+  margin: 15px 0;
+  border-radius: 4px;
+}
+
+.component h3 {
+  margin-top: 0;
+  color: var(--primary);
+}
+
+.component-details {
+  background: rgba(166, 166, 166, 0.1);
+  padding: 12px;
+  margin: 10px 0;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.tech-stack {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 15px;
+  margin: 20px 0;
+}
+
+.tech-item {
+  background: rgba(255, 107, 53, 0.1);
+  border: 1px solid var(--accent);
+  padding: 12px;
+  border-radius: 4px;
+}
+
+.tech-item strong {
+  color: var(--accent);
+}
+
+.flow-section {
+  background: rgba(0, 166, 81, 0.05);
+  padding: 15px;
+  margin: 15px 0;
+  border-left: 4px solid var(--secondary);
+  border-radius: 4px;
+}
+
+.warning {
+  background: rgba(255, 107, 53, 0.1);
+  border-left: 4px solid var(--accent);
+  padding: 12px;
+  margin: 10px 0;
+  border-radius: 4px;
+}
+
+.code-block {
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  padding: 12px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 15px 0;
+}
+
+table th, table td {
+  border: 1px solid var(--border);
+  padding: 10px;
+  text-align: left;
+}
+
+table th {
+  background: rgba(0, 102, 204, 0.1);
+  font-weight: bold;
+}
+</style>
+
+<div class="container">
+<h1>🏗️ Production RAG System - Complete Architecture</h1>
+
+<p><strong>This guide covers a real-world, enterprise-grade RAG system architecture like those used at companies like Anthropic, OpenAI, Databricks, and others.</strong></p>
+
+<h2>System Overview</h2>
+
+<div class="diagram">
+┌─────────────────────────────────────────────────────────────────┐
+│                    END USER APPLICATIONS                         │
+│  (Web App, Mobile, API Clients, Chat Interface, Slack Bot, etc) │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                    ┌────▼────┐
+                    │ API GW  │ (Rate limiting, Auth, Logging)
+                    └────┬────┘
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+   ┌────▼─────┐    ┌─────▼─────┐    ┌─────▼──────┐
+   │ INDEXING │    │  RETRIEVAL │    │ GENERATION │
+   │  PIPELINE│    │   LAYER    │    │   LAYER    │
+   └────┬─────┘    └─────┬──────┘    └─────┬──────┘
+        │                │                  │
+   ┌────▼──────────┬─────▼─────────┬────────▼────────┐
+   │ VECTOR DB    │  CACHE LAYER   │  LLM SERVICE   │
+   │ (Production) │  (Redis/Memcached) │ (Inference API)│
+   └──────────────┴────────────────┴────────────────┘
+        │
+   ┌────▼──────────────────┐
+   │  MONITORING & LOGGING │
+   │ (Observability Stack) │
+   └───────────────────────┘
+</div>
+
+<h2>1. Data Ingestion & Indexing Pipeline</h2>
+
+<div class="component">
+<h3>Purpose</h3>
+<p>Transform raw documents into queryable embeddings. This is a critical offline process that happens before any queries.</p>
+
+<div class="component-details">
+<strong>Key Responsibilities:</strong>
+<ul>
+  <li>Extract and normalize data from multiple sources</li>
+  <li>Split documents into optimal chunks</li>
+  <li>Generate embeddings for each chunk</li>
+  <li>Store in vector database with metadata</li>
+  <li>Handle updates and deletions</li>
+</ul>
+</div>
+
+<h3>1.1 Data Source Connectors</h3>
+<div class="component-details">
+<strong>What it does:</strong> Pulls data from various sources and normalizes it
+<div class="code-block">
+Sources:
+├── Databases (PostgreSQL, MongoDB)
+├── File systems (S3, GCS, Azure Blob)
+├── APIs (GitHub, Jira, Confluence)
+├── Web crawlers
+├── Real-time streams (Kafka, Pub/Sub)
+└── Structured data (CSVs, JSON)
+
+Process:
+1. Connect & authenticate to source
+2. Extract data in batches or streaming
+3. Handle incremental updates (CDC - Change Data Capture)
+4. Parse different formats
+5. Normalize into common schema
+</div>
+</div>
+
+<h3>1.2 Document Preprocessing</h3>
+<div class="component-details">
+<strong>What it does:</strong> Cleans and prepares raw documents
+<div class="code-block">
+Steps:
+1. Text extraction (PDFs, images via OCR)
+2. Language detection
+3. Encoding normalization (UTF-8)
+4. HTML/XML parsing and tag removal
+5. Removing boilerplate content
+6. Deduplication
+7. Filtering (remove spam, inappropriate content)
+8. Schema validation
+</div>
+</div>
+
+<h3>1.3 Chunking Strategy</h3>
+<div class="component-details">
+<strong>What it does:</strong> Splits documents into optimal pieces for embedding and retrieval
+<div class="code-block">
+Chunking Methods:
+
+1. Fixed-size chunks (with overlap)
+   - Size: 256-1024 tokens typically
+   - Overlap: 10-20% to maintain context
+   - Pro: Simple, predictable
+   - Con: May cut mid-sentence
+
+2. Semantic chunking
+   - Split at natural boundaries (sentences, paragraphs)
+   - Use NLP to find logical breaks
+   - Pro: Better context preservation
+   - Con: Variable chunk sizes
+
+3. Recursive chunking
+   - Try sentence splits first, then expand if needed
+   - Respects hierarchical structure
+   - Pro: Balances quality and simplicity
+   - Con: More complex logic
+
+Example Chunk:
+{
+  "id": "doc_123_chunk_5",
+  "content": "RAG systems combine retrieval with generation...",
+  "source": "documentation.pdf",
+  "page": 15,
+  "chunk_index": 5,
+  "created_at": "2024-01-15T10:00:00Z",
+  "version": 1
+}
+</div>
+</div>
+
+<h3>1.4 Embedding Generation</h3>
+<div class="component-details">
+<strong>What it does:</strong> Converts text chunks into numerical vectors (embeddings)
+<div class="code-block">
+Embedding Process:
+1. Send chunk to embedding model API
+2. Model generates dense vector (e.g., 1536 dimensions)
+3. Store vector + metadata in vector DB
+4. Index for fast similarity search
+
+Popular Embedding Models:
+├── OpenAI text-embedding-3-large (3072 dim)
+├── Claude text-embedding-3 (1024 dim)
+├── Cohere embed-english-v3.0 (1024 dim)
+├── open-source: all-MiniLM-L6-v2 (384 dim)
+└── Domain-specific: medical, legal, code embeddings
+
+Cost Consideration:
+- Small model (384 dim): Fast, cheap, lower quality
+- Large model (3072 dim): Slower, expensive, better quality
+- Batch processing for cost efficiency
+
+Typical Cost:
+~$0.00002 per 1K tokens (for text-embedding-3-large)
+Processing 1M documents: ~$20-200 depending on size
+</div>
+</div>
+
+<h3>1.5 Vector Database Storage</h3>
+<div class="component-details">
+<strong>What it does:</strong> Stores and indexes embeddings for fast similarity search
+<div class="component-details">
+<strong>Popular Vector DBs:</strong>
+</div>
+
+<table>
+<tr>
+  <th>Database</th>
+  <th>Type</th>
+  <th>Scale</th>
+  <th>Best For</th>
+</tr>
+<tr>
+  <td><strong>Pinecone</strong></td>
+  <td>Cloud</td>
+  <td>Billions</td>
+  <td>Managed, serverless, easy scaling</td>
+</tr>
+<tr>
+  <td><strong>Weaviate</strong></td>
+  <td>Self-hosted</td>
+  <td>Millions</td>
+  <td>Full control, GraphQL API</td>
+</tr>
+<tr>
+  <td><strong>Milvus</strong></td>
+  <td>Self-hosted</td>
+  <td>Billions</td>
+  <td>High performance, open source</td>
+</tr>
+<tr>
+  <td><strong>Qdrant</strong></td>
+  <td>Both</td>
+  <td>Billions</td>
+  <td>Fast filtering, flexible</td>
+</tr>
+<tr>
+  <td><strong>pgvector</strong></td>
+  <td>PostgreSQL extension</td>
+  <td>Millions</td>
+  <td>Existing Postgres users, simpler stack</td>
+</tr>
+</table>
+
+<div class="code-block">
+Vector DB Storage Structure:
+{
+  "id": "doc_123_chunk_5",
+  "vector": [0.123, -0.456, 0.789, ...], // 1536 dimensions
+  "metadata": {
+    "source": "documentation.pdf",
+    "page": 15,
+    "title": "RAG Introduction",
+    "chunk_index": 5,
+    "created_at": "2024-01-15",
+    "version": 1,
+    "language": "en"
+  },
+  "text": "RAG systems combine retrieval...",
+  "indexed_at": "2024-01-15T10:30:00Z"
+}
+</div>
+</div>
+
+<h3>1.6 Indexing Strategy</h3>
+<div class="component-details">
+<strong>What it does:</strong> Creates indices for efficient similarity search
+
+<div class="code-block">
+Index Types:
+
+1. HNSW (Hierarchical Navigable Small World)
+   - Used by: Qdrant, Weaviate, Pinecone
+   - Speed: ~O(log n)
+   - Memory: High
+   - Best for: General purpose
+
+2. IVF (Inverted File)
+   - Used by: Milvus, Faiss
+   - Speed: Faster than HNSW with approximation
+   - Memory: Lower
+   - Best for: Large-scale
+
+3. ScaNN (Learned Index)
+   - Used by: Google, newer systems
+   - Speed: Very fast
+   - Memory: Optimized
+   - Best for: Massive scale (billions)
+
+Trade-off: Speed vs. Accuracy
+- Exact search: 100% recall, slower
+- Approximate search: 95-99% recall, much faster
+- Production typically uses approximate
+</div>
+</div>
+
+<h2>2. Retrieval Layer</h2>
+
+<div class="component">
+<h3>Purpose</h3>
+<p>When a user query comes in, retrieve the most relevant documents/chunks from the vector database. This is the critical path that must be fast.</p>
+
+<h3>2.1 Query Embedding</h3>
+<div class="component-details">
+<strong>What it does:</strong> Converts user query into embedding using same model as indexing
+<div class="code-block">
+Process:
+1. User submits: "How do RAG systems work?"
+2. Send to embedding model
+3. Get vector: [0.234, -0.567, ...]
+4. Search this vector against DB
+
+CRITICAL: Use same embedding model as indexing!
+Different models = incomparable vectors = bad results
+</div>
+</div>
+
+<h3>2.2 Similarity Search</h3>
+<div class="component-details">
+<strong>What it does:</strong> Finds most similar vectors to query vector
+<div class="code-block">
+Similarity Metrics:
+1. Cosine similarity (most common)
+   - Measures angle between vectors
+   - Range: -1 to 1 (higher = more similar)
+   - Fast to compute
+
+2. Euclidean distance
+   - Geometric distance between points
+   - Good for some embedding models
+   - Slightly slower
+
+3. Dot product
+   - Simple inner product
+   - Fast when vectors normalized
+
+Query Example:
+search_vector = embed("How do RAG systems work?")
+results = vector_db.query(
+  vector=search_vector,
+  top_k=10,  // Return top 10 results
+  filter={"source": "documentation"},  // Optional filters
+  threshold=0.75  // Minimum similarity score
+)
+</div>
+</div>
+
+<h3>2.3 Metadata Filtering & Hybrid Search</h3>
+<div class="component-details">
+<strong>What it does:</strong> Combines semantic (vector) and keyword search
+<div class="code-block">
+Hybrid Search Strategy:
+1. Vector search finds semantically similar content
+2. Keyword search (BM25) finds exact matches
+3. Results merged and re-ranked
+
+Example Query:
+- Vector search: Find chunks similar to "RAG"
+- Keyword search: Find chunks containing exact term "RAG"
+- Combine: Results that appear in both ranked higher
+
+Filters Applied:
+├── Document type (PDF, website, code)
+├── Date range (modified in last 30 days)
+├── Source (internal docs only)
+├── Language
+├── Author/department
+├── Sensitivity level
+└── Custom metadata
+
+Benefits:
+- More precise results
+- Reduces hallucinations
+- Enforces security/privacy policies
+</div>
+</div>
+
+<h3>2.4 Re-ranking</h3>
+<div class="component-details">
+<strong>What it does:</strong> Improves quality of retrieved results
+<div class="code-block">
+Re-ranking Process:
+1. Get top-100 from vector search (fast but maybe not perfect)
+2. Use cross-encoder model to score all 100
+3. Re-rank by score
+4. Return top-10 to generation
+
+Why?
+- Vector search is approximate (75-90% accuracy)
+- Cross-encoder is slower but more accurate
+- 2-stage approach: speed + quality
+
+Popular Re-rankers:
+├── BGE Reranker (open source)
+├── Cohere reranker
+├── MixedBread reranker
+└── Custom trained models
+</div>
+</div>
+
+<h3>2.5 Caching Layer</h3>
+<div class="component-details">
+<strong>What it does:</strong> Caches frequent queries to reduce latency and cost
+
+<div class="code-block">
+Cache Layers:
+
+1. Query cache (Redis)
+   - Cache full query results
+   - Key: hash(query + filters)
+   - TTL: 1 hour to 7 days
+   - Hit rate: 10-30% for typical apps
+
+2. Embedding cache
+   - Cache query embeddings
+   - Avoid re-embedding same queries
+   - Hit rate: 30-50%
+
+3. Vector search cache
+   - Cache vector DB results
+   - Most expensive operation
+   - Hit rate: 20-40%
+
+Example Cache:
+cache_key = hash(query + user_id + filters)
+cached_results = redis.get(cache_key)
+if cached_results:
+  return cached_results
+else:
+  results = retrieve(query)
+  redis.setex(cache_key, 3600, results)
+  return results
+
+Cost Impact:
+- Cache hit reduces cost by 90%
+- 20% hit rate = ~15% cost reduction
+- Also 10-100x faster
+</div>
+</div>
+
+<h2>3. Generation Layer (LLM)</h2>
+
+<div class="component">
+<h3>Purpose</h3>
+<p>Takes retrieved context + user query and generates an answer using a large language model.</p>
+
+<h3>3.1 Prompt Engineering</h3>
+<div class="component-details">
+<strong>What it does:</strong> Constructs the prompt sent to LLM with context
+<div class="code-block">
+Prompt Structure:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+System Prompt (defines behavior):
+"You are a helpful assistant answering questions
+based on provided documents. Be accurate and
+cite your sources. Do not make up information."
+
+Retrieved Context:
+"Document 1: RAG systems combine retrieval...
+Document 2: Embeddings are numerical...
+Document 3: Vector databases store..."
+
+User Query:
+"How do RAG systems work?"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Full Message:
+System: [system prompt]
+Context: [retrieved docs]
+User: [query]
+
+Key Techniques:
+1. Chain-of-thought: Ask LLM to reason step-by-step
+2. Few-shot examples: Show example Q&A
+3. Format specification: "Return as JSON/HTML"
+4. Source attribution: "Cite which document"
+5. Guardrails: "Only use provided context"
+</div>
+</div>
+
+<h3>3.2 LLM Service / Inference Engine</h3>
+<div class="component-details">
+<strong>What it does:</strong> Calls the language model to generate answer
+
+<div class="code-block">
+LLM Options:
+
+1. Cloud APIs (Simple, no infrastructure)
+   ├── OpenAI API (GPT-4, GPT-3.5)
+   ├── Anthropic API (Claude)
+   ├── Google Gemini API
+   └── Cohere Generate API
+   Pros: Simple, latest models
+   Cons: Cost per call, latency, vendor lock-in
+
+2. Self-hosted (Full control, lower cost at scale)
+   ├── Llama 2/3 on GPU cluster
+   ├── Mistral on GPU cluster
+   ├── Open-source models
+   └── vLLM for serving
+   Pros: Control, cost savings
+   Cons: Infrastructure, maintenance
+
+3. Hybrid (Balance)
+   - Use local model for simple queries
+   - Fall back to Claude/GPT for complex ones
+
+Typical Call:
+response = openai.ChatCompletion.create(
+  model="gpt-4",
+  messages=[
+    {"role": "system", "content": "You are..."},
+    {"role": "user", "content": "Context: ...\n\nQuestion: ..."}
+  ],
+  temperature=0.7,  // 0-1: lower = deterministic
+  max_tokens=500,
+  top_p=0.9
+)
+</div>
+</div>
+
+<h3>3.3 Post-Processing</h3>
+<div class="component-details">
+<strong>What it does:</strong> Refines LLM output before returning to user
+<div class="code-block">
+Processing Steps:
+1. Extract answer from response
+2. Parse structured output (if JSON requested)
+3. Validate answer quality
+4. Extract citations
+5. Clean up formatting
+6. Add metadata
+
+Quality Checks:
+├── Length check (too short/long?)
+├── Relevance check (does it answer query?)
+├── Confidence scoring (how confident?)
+├── Hallucination detection
+└── Citation validation (does cite exist?)
+
+Example:
+{
+  "answer": "RAG systems work by...",
+  "confidence": 0.95,
+  "citations": [
+    {"doc_id": "123", "chunk": 5, "text": "..."},
+    {"doc_id": "456", "chunk": 2, "text": "..."}
+  ],
+  "sources": ["documentation.pdf", "blog.md"],
+  "generated_at": "2024-01-15T10:35:00Z"
+}
+</div>
+</div>
+
+<h2>4. Supporting Infrastructure</h2>
+
+<h3>4.1 API Gateway & Orchestration</h3>
+<div class="component-details">
+<strong>What it does:</strong> Routes requests, handles authentication, rate limiting
+<div class="code-block">
+Responsibilities:
+├── Authentication (API keys, OAuth)
+├── Authorization (check user permissions)
+├── Rate limiting (limit requests/min)
+├── Request validation
+├── Response formatting
+├── Error handling
+├── Logging
+├── Request tracing
+├── Load balancing
+└── Circuit breaking
+
+Example Flow:
+1. User calls: POST /api/query
+2. Gateway validates API key
+3. Check rate limit (10 req/min for user)
+4. Log request ID for tracing
+5. Route to retrieval service
+6. Wait for response
+7. Format response
+8. Return to client
+</div>
+</div>
+
+<h3>4.2 Database (Document Storage)</h3>
+<div class="component-details">
+<strong>What it does:</strong> Stores original documents and metadata
+<div class="code-block">
+Purpose:
+- Original documents for reference
+- Metadata (title, author, date, tags)
+- Version control
+- Access control
+- Audit trail
+
+Schema:
+Documents table:
+├── id (unique)
+├── title
+├── content (full text)
+├── source
+├── created_at
+├── updated_at
+├── version
+├── author
+├── tags []
+├── access_level
+└── embedding_status
+
+Chunks table:
+├── id
+├── document_id (FK)
+├── chunk_index
+├── content
+├── embedding_id (reference to vector DB)
+├── created_at
+└── metadata {}
+</div>
+</div>
+
+<h3>4.3 Message Queue (For Async Processing)</h3>
+<div class="component-details">
+<strong>What it does:</strong> Handles asynchronous tasks
+<div class="code-block">
+Used for:
+├── Indexing documents (slow)
+├── Re-embedding on updates
+├── Batch processing
+├── Webhooks and notifications
+└── Scheduled tasks
+
+Example Queue:
+User uploads document
+  ↓
+API adds job to queue: "index-document-123"
+  ↓
+Returns immediately (doesn't wait)
+  ↓
+Worker picks up job
+  ↓
+Chunks document
+  ↓
+Generates embeddings
+  ↓
+Stores in vector DB
+  ↓
+Updates status to "indexed"
+  ↓
+User notified via webhook
+
+Popular Queue Systems:
+├── Kafka (high throughput, distributed)
+├── RabbitMQ (classic, reliable)
+├── AWS SQS (cloud, simple)
+├── Bull (Node.js, in-memory)
+└── Celery (Python distributed tasks)
+</div>
+</div>
+
+<h2>5. Monitoring & Observability</h2>
+
+<div class="component">
+<h3>5.1 Logging</h3>
+<div class="component-details">
+<strong>What it does:</strong> Tracks what happens in the system
+<div class="code-block">
+Log Levels:
+├── DEBUG: Detailed info for troubleshooting
+├── INFO: General operational info
+├── WARN: Something unexpected happened
+├── ERROR: Something failed
+└── CRITICAL: System failure
+
+What to log:
+├── Query: "query_text", "user_id", "timestamp"
+├── Retrieval: "chunks_returned", "similarity_scores"
+├── Generation: "model_used", "tokens_used", "latency"
+├── Cache: "cache_hit/miss", "ttl"
+├── Errors: "error_type", "stack_trace", "recovery"
+└── Cost: "embedding_cost", "llm_cost", "total"
+
+Log Aggregation:
+- Centralize logs in ELK, Datadog, CloudWatch
+- Search across millions of logs
+- Alert on errors
+</div>
+</div>
+
+<h3>5.2 Metrics & Monitoring</h3>
+<div class="component-details">
+<strong>What it does:</strong> Tracks system performance
+<div class="code-block">
+Key Metrics:
+
+Latency:
+├── Query embedding: < 100ms
+├── Vector search: < 200ms
+├── LLM inference: 1-5s (network + model)
+├── Total end-to-end: < 10s target
+└── p50, p95, p99 percentiles tracked
+
+Quality:
+├── Relevance (% of top-10 results relevant)
+├── Answer accuracy (against ground truth)
+├── Hallucination rate
+├── Citation accuracy
+└── User satisfaction (thumbs up/down)
+
+Cost:
+├── Embedding cost (per query)
+├── LLM cost (per token)
+├── Storage cost (vector DB)
+├── Infrastructure cost (compute/bandwidth)
+└── Cost per query (important!)
+
+Throughput:
+├── Queries per second (QPS)
+├── Document indexing rate
+├── Cache hit rate
+└── System availability %
+
+Dashboards:
+Grafana showing real-time:
+├── Response latency (histogram)
+├── Error rate
+├── QPS (queries per second)
+├── Cache hit rate
+├── Cost trends
+└── System capacity
+</div>
+</div>
+
+<h3>5.3 Tracing</h3>
+<div class="component-details">
+<strong>What it does:</strong> Tracks request flow across services
+<div class="code-block">
+Example Trace (for single query):
+
+User submits query "How do RAG systems work?"
+  ├── trace_id: "abc123"
+  ├─ API Gateway [10ms]
+  ├─ Query embedding [150ms]
+  ├─ Vector search [200ms]
+  ├─ Re-ranking [300ms]
+  ├─ LLM inference [3000ms]
+  └─ Response formatting [50ms]
+Total: 3710ms
+
+Trace tools:
+├── Jaeger (open source)
+├── Datadog APM
+├── Google Cloud Trace
+└── Honeycomb
+
+Helps:
+- Find bottlenecks
+- Debug latency
+- Understand failures
+- Optimize performance
+</div>
+</div>
+
+<h3>5.4 Alerting</h3>
+<div class="component-details">
+<strong>What it does:</strong> Notifies ops team of issues
+
+<div class="code-block">
+Alert Conditions:
+├── Error rate > 5%
+├── Latency p99 > 10s
+├── Cache hit rate < 10%
+├── Vector DB response time > 1s
+├── LLM API is down
+├── Out of budget/quota
+├── Hallucination rate > 10%
+└── Low result relevance (< 60%)
+
+Alert Channels:
+├── Slack notifications
+├── PagerDuty (ops on-call)
+├── Email
+├── SMS (critical)
+└── Custom webhooks
+</div>
+</div>
+
+<h2>6. Quality & Evaluation</h2>
+
+<div class="component">
+<h3>6.1 Hallucination Detection</h3>
+<div class="component-details">
+<strong>What it does:</strong> Catches LLM making up information
+<div class="code-block">
+Techniques:
+
+1. Citation enforcement
+   - Require answer to cite retrieved documents
+   - Validate citations exist and are accurate
+   - Reject answers without valid citations
+
+2. Semantic similarity check
+   - Compare generated answer to retrieved context
+   - If too different, likely hallucinating
+   - Threshold: > 0.7 similarity
+
+3. Fact verification
+   - Cross-reference facts against knowledge base
+   - Use separate verification model
+   - Ask: "Is this fact in the documents?"
+
+4. User feedback loop
+   - Collect thumbs down on answers
+   - Flag as hallucination
+   - Use for retraining/improvement
+
+Example:
+Question: "Who founded RAG?"
+Answer: "John Smith founded RAG in 2019"
+Retrieved docs: (no mention of John Smith)
+Result: HALLUCINATION DETECTED
+Action: Return error or "I don't know"
+</div>
+</div>
+
+<h3>6.2 Relevance Scoring</h3>
+<div class="component-details">
+<strong>What it does:</strong> Measures if results are actually relevant
+<div class="code-block">
+Methods:
+
+1. Ground truth dataset
+   - Create Q&A pairs with expected results
+   - Test retrieval against ground truth
+   - Measure recall@k
+
+2. User feedback
+   - Collect thumbs up/down
+   - Track which chunks marked as relevant
+   - Improve retrieval based on feedback
+
+3. BLEU/ROUGE scores
+   - Compare generated answer to reference answer
+   - Automated quality metric
+   - Imperfect but useful
+
+Metrics:
+├── Precision@10 (how many of top 10 are relevant?)
+├── Recall@10 (of all relevant docs, how many in top 10?)
+├── nDCG (normalized discounted cumulative gain)
+├── MRR (mean reciprocal rank)
+└── F1 score (combined precision/recall)
+
+Typical targets:
+├── Precision@10: > 0.8 (80% of results relevant)
+├── Recall@10: > 0.7 (find 70% of all relevant)
+└── User satisfaction: > 4.0 / 5.0
+</div>
+</div>
+
+<h3>6.3 Continuous Improvement</h3>
+<div class="component-details">
+<strong>What it does:</strong> Identifies where system fails and improves
+
+<div class="code-block">
+Feedback Loop:
+1. User gets answer
+2. Provides feedback (good/bad)
+3. System logs the interaction
+4. Analysts review bad cases
+5. Identify root cause:
+   - Bad embedding?
+   - Bad chunking?
+   - LLM error?
+   - Missing document?
+6. Fix identified issue
+7. Test improvement
+8. Deploy to production
+9. Measure impact
+
+Common Improvements:
+├── Re-train embedding model on feedback
+├── Adjust chunking strategy
+├── Improve prompt engineering
+├── Add more documents to knowledge base
+├── Implement better filtering
+├── Upgrade to better LLM model
+└── Add more re-ranking layers
+</div>
+</div>
+
+<h2>7. Security & Privacy</h2>
+
+<div class="component">
+<h3>7.1 Access Control</h3>
+<div class="component-details">
+<strong>What it does:</strong> Ensures users only see documents they should
+<div class="code-block">
+Implementation:
+1. Tag documents with access level
+2. Store user permissions in database
+3. On query, filter chunks by:
+   - User's department
+   - User's clearance level
+   - Document owner
+   - Public/private flag
+
+Example:
+User: "employee@company.com" (Engineering dept)
+Query: "salary information"
+System checks: Can this user access salary docs?
+  - User is in Engineering dept
+  - Salary docs are HR only
+  - Result: ACCESS DENIED
+
+Filter at retrieval:
+retrieved_chunks = [
+  c for c in results
+  if user_has_access(user_id, c.document_id)
+]
+</div>
+</div>
+
+<h3>7.2 Data Encryption</h3>
+<div class="component-details">
+<strong>What it does:</strong> Protects sensitive data
+<div class="code-block">
+Encryption layers:
+
+1. Data at rest
+   - Encrypt vector DB
+   - Encrypt document store
+   - Encrypt metadata
+   - Use: AES-256
+
+2. Data in transit
+   - HTTPS/TLS for all API calls
+   - Encrypt messages in queue
+   - VPN for internal services
+
+3. PII masking
+   - Detect personally identifiable info
+   - Remove/anonymize before embedding
+   - Separate PII in secure storage
+</div>
+</div>
+
+<h3>7.3 Audit Trail</h3>
+<div class="component-details">
+<strong>What it does:</strong> Tracks who accessed what when
+<div class="code-block">
+Logs for compliance:
+├── User ID
+├── Query executed
+├── Documents accessed
+├── Timestamp
+├── IP address
+├── Result
+└── Any data exported
+
+Used for:
+├── Compliance audits
+├── Security investigations
+├── User behavior analysis
+└── Insider threat detection
+
+Retention:
+- Keep logs 1-7 years depending on regulation
+- Immutable storage (can't modify logs)
+</div>
+</div>
+
+<h2>8. Deployment & Scaling</h2>
+
+<div class="component">
+<h3>8.1 Architecture Pattern</h3>
+<div class="component-details">
+<strong>What it does:</strong> How system scales to handle load
+<div class="code-block">
+Typical deployment:
+
+┌─────────────────┐
+│  Load Balancer  │ (distribute traffic)
+└────────┬────────┘
+         │
+    ┌────┴────┬────────┬────────┐
+    │         │        │        │
+ ┌──▼──┐  ┌──▼──┐  ┌──▼──┐  ┌──▼──┐
+ │API  │  │API  │  │API  │  │API  │ (horizontal scaling)
+ │Pod1 │  │Pod2 │  │Pod3 │  │PodN │
+ └──┬──┘  └──┬──┘  └──┬──┘  └──┬──┘
+    │        │       │        │
+    └────────┼───────┼────────┘
+             │       │
+          ┌──▼───┐   │
+          │Cache │   │
+          │(Redis)   │
+          └────────┘  │
+                      │
+                  ┌───▼────────┐
+                  │ Vector DB  │ (shared, not replicated per pod)
+                  │ (Pinecone) │
+                  └────────────┘
+
+Container Orchestration:
+- Kubernetes: Each pod is replica of same service
+- Auto-scaling: Add more pods if CPU/latency high
+- Health checks: Remove failing pods
+- Rolling updates: Deploy new version gradually
+</div>
+</div>
+
+<h3>8.2 Cost Optimization</h3>
+<div class="component-details">
+<strong>What it does:</strong> Reduces operational costs
+
+<div class="code-block">
+Cost breakdown (typical):
+├── Embedding API: 30% (most queries need embedding)
+├── LLM API: 40% (longest inference)
+├── Vector DB: 15% (storage + compute)
+├── Compute: 10% (servers/containers)
+└── Other: 5%
+
+Optimization strategies:
+
+1. Embedding caching
+   - Cache embeddings of popular queries
+   - Reduces embedding cost by 20-30%
+
+2. Model selection
+   - Use cheaper embedding model if quality OK
+   - Use faster LLM for simple queries
+   - Save large model for complex queries
+
+3. Batching
+   - Batch 50 documents for embedding
+   - Reduce per-document overhead
+
+4. Approximation
+   - Use approximate search (95% recall)
+   - vs exact search (100% recall)
+   - 10x faster, same quality
+
+5. Caching strategy
+   - 1 day cache for non-urgent queries
+   - 1 hour for real-time needs
+   - Every 1% hit rate = ~1% cost savings
+
+Example costs (monthly):
+- 1M queries/month
+- 100 retrievals, 1 LLM call per query
+- Embedding: $30 (embedding model)
+- LLM: $50 (Claude 3 Sonnet)
+- Vector DB: $15 (Pinecone starter)
+- Compute: $100
+Total: ~$195/month for 1M queries = $0.000195 per query
+</div>
+</div>
+
+<h2>9. Real-World Challenges & Solutions</h2>
+
+<div class="warning">
+<strong>Challenge 1: Stale Knowledge</strong>
+<div class="component-details">
+Problem: Documents become outdated
+Solutions:
+├── Re-index frequently (daily)
+├── Add document age to retrieval
+├── Deprecate old versions
+├── Use real-time data sources (APIs, streams)
+└── Let users flag outdated results
+</div>
+</div>
+
+<div class="warning">
+<strong>Challenge 2: Retrieval Failures</strong>
+<div class="component-details">
+Problem: Relevant documents not retrieved
+Solutions:
+├── Use multiple query strategies
+├── Expand query with synonyms
+├── Re-rank more aggressively
+├── Increase top_k retrieved
+├── Use hybrid (keyword + semantic)
+└── Retrain embedding model
+</div>
+</div>
+
+<div class="warning">
+<strong>Challenge 3: LLM Hallucinations</strong>
+<div class="component-details">
+Problem: LLM makes up facts not in documents
+Solutions:
+├── Require citations
+├── Validate citations
+├── Use constrained generation
+├── Use smaller models (less hallucination)
+├── Few-shot prompting
+└── Fact-checking step
+</div>
+</div>
+
+<div class="warning">
+<strong>Challenge 4: Latency</strong>
+<div class="component-details">
+Problem: System is too slow (> 10s)
+Solutions:
+├── Cache more aggressively
+├── Reduce top_k retrieved
+├── Use faster embedding model
+├── Use faster LLM model
+├── Approximate search
+├── Pre-compute popular queries
+└── Optimize infrastructure
+</div>
+</div>
+
+<div class="warning">
+<strong>Challenge 5: Cost</strong>
+<div class="component-details">
+Problem: Spending too much per query
+Solutions:
+├── Use cheaper embedding model
+├── Use cheaper LLM model
+├── Cache results
+├── Batch processing
+├── Self-host where viable
+├── Reduce embedding dimensions
+└── Monitor per-query costs
+</div>
+</div>
+
+<h2>10. Technology Stack Example</h2>
+
+<div class="tech-stack">
+<div class="tech-item">
+<strong>Ingestion:</strong>
+- Airflow (orchestration)
+- Langchain (chunking, RAG framework)
+- FastAPI (async processing)
+</div>
+<div class="tech-item">
+<strong>Embeddings:</strong>
+- Claude Embeddings API
+- Sentence Transformers
+- Custom fine-tuned models
+</div>
+<div class="tech-item">
+<strong>Vector DB:</strong>
+- Pinecone (cloud)
+- Qdrant (self-hosted)
+- pgvector (Postgres)
+</div>
+<div class="tech-item">
+<strong>LLM:</strong>
+- Claude API (primary)
+- OpenAI GPT-4
+- Llama 2/3 (self-hosted)
+</div>
+<div class="tech-item">
+<strong>Caching:</strong>
+- Redis (in-memory cache)
+- Memcached (alternative)
+- CloudFront (edge caching)
+</div>
+<div class="tech-item">
+<strong>Databases:</strong>
+- PostgreSQL (metadata)
+- MongoDB (documents)
+- Elasticsearch (full-text)
+</div>
+<div class="tech-item">
+<strong>Infrastructure:</strong>
+- Kubernetes (orchestration)
+- Docker (containerization)
+- GKE/EKS/AKS (managed)
+</div>
+<div class="tech-item">
+<strong>Monitoring:</strong>
+- Prometheus (metrics)
+- Grafana (dashboards)
+- Datadog (APM)
+</div>
+<div class="tech-item">
+<strong>Logging:</strong>
+- ELK Stack (Elasticsearch)
+- Datadog Logs
+- Loki (Grafana)
+</div>
+<div class="tech-item">
+<strong>Queue:</strong>
+- Kafka (high throughput)
+- RabbitMQ (reliability)
+- AWS SQS (simplicity)
+</div>
+</div>
+
+<h2>Summary: The Complete Picture</h2>
+
+<div class="flow-section">
+<h3>Offline: Indexing Pipeline</h3>
+<div class="code-block">
+Extract Data → Clean → Chunk → Embed → Store in Vector DB
+    ↓
+    Happens once, re-run on updates
+    Batch processing, can be slow
+</div>
+</div>
+
+<div class="flow-section">
+<h3>Online: Query Processing (Critical Path)</h3>
+<div class="code-block">
+User Query
+    ↓
+Embed Query (100ms) ← from cache if possible
+    ↓
+Search Vector DB (200ms) ← retrieve top-10
+    ↓
+Re-rank Results (300ms) ← improve quality
+    ↓
+Generate Answer via LLM (3000ms) ← main latency
+    ↓
+Post-process & Format (50ms)
+    ↓
+Return to User
+Total: ~3.6 seconds
+</div>
+</div>
+
+<h2>Key Takeaways</h2>
+<ul>
+<li><strong>Embeddings are the currency</strong> — they must be consistent, high quality, and in the right dimensional space</li>
+<li><strong>Vector DB is the backbone</strong> — retrieval quality determines answer quality; garbage in = garbage out</li>
+<li><strong>Caching is critical</strong> — can reduce cost/latency by 10-100x; cache hits are gold</li>
+<li><strong>Quality is hard</strong> — hallucinations, stale data, bad retrieval require constant monitoring</li>
+<li><strong>Cost compounds</strong> — Every query has embedding cost + LLM cost; at scale, these add up quickly</li>
+<li><strong>Latency matters</strong> — Users expect < 10 seconds; optimize the LLM inference step first</li>
+<li><strong>Observability wins wars</strong> — Without logging/metrics, you're flying blind; good instrumentation pays for itself</li>
+<li><strong>Start simple, scale when needed</strong> — Use managed services first (Pinecone, Claude API); self-host only when you have the ops team</li>
+</ul>
+
+</div>
